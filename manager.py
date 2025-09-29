@@ -66,14 +66,75 @@ def main():
                     chosen = free[:n]
                     for dn in chosen:
                         disks[dn]["state"] = f"InDSS:{dss_name}"
-                    dsses[dss_name] = {"n": n, "striping_unit": b, "disks": chosen}
+                    dsses[dss_name] = {"n": n, "striping_unit": b, "disks": chosen, "files": {}}
                     resp = {
                         "status": "SUCCESS",
                         "dss": {"dss_name": dss_name, "n": n, "striping_unit": b, "disks": chosen}
                     }
 
+        elif cmd == "ls":
+            listing = {
+                "users": sorted(users.keys()),
+                "disks": [{"name": n, "state": disks[n]["state"]} for n in sorted(disks.keys())],
+                "dsses": [
+                    {
+                        "dss_name": dn,
+                        "n": dsses[dn]["n"],
+                        "striping_unit": dsses[dn]["striping_unit"],
+                        "disks": dsses[dn]["disks"],
+                        "files": dsses[dn]["files"],
+                    }
+                    for dn in sorted(dsses.keys())
+                ],
+                "free_disks": [n for n in sorted(disks.keys()) if disks[n]["state"] == "Free"],
+            }
+            resp = {"status": "SUCCESS", "listing": listing}
+        elif cmd == "copy-prepare":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+            file_name = a.get("file_name")
+            owner = a.get("owner")
+        
+            dss = dsses.get(dss_name)
+            if not dss:
+                resp = {"status": "FAILURE", "error": "no such dss"}
+            else:
+                disk_eps = []
+                for dn in dss["disks"]:
+                    info = disks.get(dn)
+                    disk_eps.append({"disk_name": dn, "ip": info["ip"], "c_port": info["c_port"]})
+                resp = {
+                    "status": "SUCCESS",
+                    "dss": {
+                        "dss_name": dss_name,
+                        "n": dss["n"],
+                        "striping_unit": dss["striping_unit"],
+                        "disks": disk_eps
+                    }
+                }
+        
+        elif cmd == "copy-complete":
+            a = msg.get("args", {})
+            dss_name  = a.get("dss_name")
+            file_name = a.get("file_name")
+            owner     = a.get("owner")
+            size      = a.get("size")
+        
+            dss = dsses.get(dss_name)
+            if not dss:
+                resp = {"status": "FAILURE", "error": "no such dss"}
+            else:
+                try:
+                    size = int(size)
+                except Exception:
+                    size = -1
+                if size < 0:
+                    resp = {"status": "FAILURE", "error": "invalid size"}
+                else:
+                    dss["files"][file_name] = {"owner": owner, "size": size}
+                    resp = {"status": "SUCCESS"}
         else:
-            resp = {"status":"FAILURE", "error":"unsupported in step 1"}
+            resp = {"status":"FAILURE", "error":"unsupported"}
 
         sock.sendto(json.dumps(resp).encode(), addr)
 
