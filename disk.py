@@ -30,6 +30,7 @@ def main():
 
     # in the memory make sure to store: (file_name, stripe_idx, disk_index) in bytes
     store = {}
+    mode = {"state": "normal"}
 
     def content_loop():
         while True:
