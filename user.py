@@ -1,5 +1,6 @@
 import socket, json, argparse
 import os, base64
+import hashlib
 
 def send(sock, mgr, msg):
     sock.sendto(json.dumps(msg).encode(), mgr)
@@ -11,6 +12,24 @@ def parity_disk(n: int, stripe_idx: int) -> int:
 
 def b64e(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
+
+def send_to_with_timeout(sock, target, msg, timeout=1.0):
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(json.dumps(msg).encode(), target)
+        data, _ = sock.recvfrom(65535)
+        return json.loads(data.decode("utf-8"))
+    except socket.timeout:
+        return {"status": "FAILURE", "error": "timeout"}
+    finally:
+        sock.settimeout(None)
+
+def b64d(s: str) -> bytes:
+    return base64.b64decode(s.encode("ascii"))
+
+def data_disk_order(n: int, stripe_idx: int):
+    p = parity_disk(n, stripe_idx)
+    return [i for i in range(n) if i != p]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -43,6 +62,93 @@ def main():
         elif line == "ls":
             r = send(sock, mgr, {"cmd": "ls", "args": {}})
             print(json.dumps(r, indent=2))
+        elif line.startswith("read "):
+            parts = line.split(maxsplit=3)
+            if len(parts) != 4:
+                print("usage: read <dss_name> <file_name> <output_path>")
+                continue
+    
+            dss_name, file_name, out_path = parts[1], parts[2], parts[3]
+    
+            prep = send(sock, mgr, {
+                "cmd": "read-prepare",
+                "args": {"dss_name": dss_name, "file_name": file_name}
+            })
+            if prep.get("status") != "SUCCESS":
+                print("read-prepare failed:", prep)
+                continue
+    
+            n = int(prep["dss"]["n"])
+            b = int(prep["dss"]["striping_unit"])
+            disks = prep["dss"]["disks"]
+            file_size = int(prep["file"]["size"])
+    
+            blocks_per_stripe = n - 1
+            total_stripes = (file_size + (blocks_per_stripe * b) - 1) // (blocks_per_stripe * b)
+    
+            data_blocks = []
+            for stripe_idx in range(total_stripes):
+                p = parity_disk(n, stripe_idx)
+    
+                got = [None] * n
+                for disk_index in range(n):
+                    target = (disks[disk_index]["ip"], int(disks[disk_index]["c_port"]))
+                    r = send_to_with_timeout(sock, target, {
+                        "cmd": "read-block",
+                        "args": {"file_name": file_name, "stripe_idx": stripe_idx, "disk_index": disk_index}
+                    }, timeout=1.0)
+                    if r.get("status") == "SUCCESS":
+                        try:
+                            got[disk_index] = b64d(r["block_b64"])
+                        except Exception:
+                            got[disk_index] = None
+    
+                missing = [i for i in range(n) if got[i] is None]
+    
+                if len(missing) == 0:
+                    pass
+                elif len(missing) == 1:
+                    miss = missing[0]
+                    x = bytearray(b)
+                    if miss == p:
+                        for i in range(n):
+                            if i == p: continue
+                            blk = got[i]
+                            for j in range(b):
+                                x[j] ^= blk[j]
+                        got[p] = bytes(x)
+                    else:
+                        for i in range(n):
+                            if i == miss: continue
+                            blk = got[i]
+                            for j in range(b):
+                                x[j] ^= blk[j]
+                        got[miss] = bytes(x)
+                else:
+                    print(f"read failed at stripe {stripe_idx}: more than one block missing")
+                    data_blocks = []
+                    break
+    
+                for i in range(n):
+                    if i == p:
+                        continue
+                    data_blocks.append(got[i])
+    
+            if not data_blocks:
+                print("read aborted")
+                continue
+    
+            buf = b"".join(data_blocks)[:file_size]
+            try:
+                with open(out_path, "wb") as f:
+                    f.write(buf)
+                print(f"read -> wrote {len(buf)} bytes to {out_path}")
+            except Exception as e:
+                print("write failed:", e)
+    
+            done = send(sock, mgr, {"cmd": "read-complete", "args": {}})
+            if done.get("status") != "SUCCESS":
+                print("read-complete ack:", done)
         elif line.startswith("copy "):
             parts = line.split(maxsplit=2)
             if len(parts) != 3:
@@ -116,7 +222,7 @@ def main():
                             "block_b64": b64e(block),
                         }
                     }
-                    ack = send(sock, target, msg)
+                    ack = send_to_with_timeout(sock, target, msg, timeout=1.0)
                     if ack.get("status") != "SUCCESS":
                         print("write-block failed:", ack)
 
