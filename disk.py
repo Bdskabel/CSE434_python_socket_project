@@ -1,4 +1,5 @@
 import socket, json, argparse, time
+import threading, base64
 
 def main():
     ap = argparse.ArgumentParser()
@@ -23,6 +24,51 @@ def main():
     # Wait for reply
     data, _ = sock.recvfrom(12000)
     print(json.loads(data.decode("utf-8")))
+
+    c_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    c_sock.bind(("0.0.0.0", args.my_c_port))
+
+    # in the memory make sure to store: (file_name, stripe_idx, disk_index) in bytes
+    store = {}
+
+    def content_loop():
+        while True:
+            data2, addr2 = c_sock.recvfrom(65535)
+            try:
+                msg2 = json.loads(data2.decode("utf-8"))
+            except Exception:
+                c_sock.sendto(json.dumps({"status": "FAILURE", "error": "bad json"}).encode(), addr2)
+                continue
+
+            if msg2.get("cmd") == "write-block":
+                a2 = msg2.get("args", {})
+                file_name  = a2.get("file_name")
+                stripe_idx = a2.get("stripe_idx")
+                disk_index = a2.get("disk_index")
+                block_b64  = a2.get("block_b64")
+
+                ok = True
+                try:
+                    stripe_idx = int(stripe_idx)
+                    disk_index = int(disk_index)
+                except Exception:
+                    ok = False
+
+                if not (ok and file_name and isinstance(block_b64, str)):
+                    resp2 = {"status": "FAILURE", "error": "missing/invalid fields"}
+                else:
+                    try:
+                        block = base64.b64decode(block_b64.encode("ascii"))
+                        store[(file_name, stripe_idx, disk_index)] = block
+                        resp2 = {"status": "SUCCESS"}
+                    except Exception as e:
+                        resp2 = {"status": "FAILURE", "error": f"decode error: {e}"}
+
+                c_sock.sendto(json.dumps(resp2).encode(), addr2)
+            else:
+                c_sock.sendto(json.dumps({"status": "FAILURE", "error": "unsupported"}).encode(), addr2)
+
+    threading.Thread(target=content_loop, daemon=True).start()
 
     print("Disk registered. Ctrl+C to exit.")
     try:
