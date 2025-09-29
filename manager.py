@@ -1,5 +1,6 @@
 # Step 1 manager: supports register-user and register-disk
 import socket, json, argparse
+import random
 
 def power_of_two(x: int) -> bool:
     return x > 0 and (x & (x - 1)) == 0
@@ -17,6 +18,7 @@ def main():
     users = {}  
     disks = {}
     dsses = {} 
+    busy = {"op": None, "dss": None, "user": None} 
 
     # Ensure this runs
     print(f"Manager listening on UDP {args.manager_port}")
@@ -24,6 +26,13 @@ def main():
         data, addr = sock.recvfrom(12000)  # 12 KB, might need to up this?
         msg = json.loads(data.decode("utf-8"))
         cmd = msg.get("cmd","")
+
+        if busy["op"] is not None:
+            allowed = "copy-complete" if busy["op"] == "copy" else "decommission-complete"
+            if cmd != allowed:
+                resp = {"status": "FAILURE", "error": f"busy: {busy['op']} in progress"}
+                sock.sendto(json.dumps(resp).encode(), addr)
+                continue
         # Handle the register-user command
         if cmd == "register-user":
             a = msg.get("args", {})
@@ -98,6 +107,7 @@ def main():
             dss_name = a.get("dss_name")
             file_name = a.get("file_name")
             owner = a.get("owner")
+            
         
             dss = dsses.get(dss_name)
             if not dss:
