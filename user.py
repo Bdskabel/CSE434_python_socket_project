@@ -1,4 +1,5 @@
 import socket, json, argparse
+import os, base64
 
 def send(sock, mgr, msg):
     sock.sendto(json.dumps(msg).encode(), mgr)
