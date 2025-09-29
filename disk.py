@@ -91,6 +91,10 @@ def main():
                     resp2 = {"status": "SUCCESS", "block_b64": base64.b64encode(block).decode("ascii")}
                 c_sock.sendto(json.dumps(resp2).encode(), addr2)
 
+            elif msg2.get("cmd") == "wipe":
+                store.clear()
+                resp2 = {"status": "SUCCESS"}
+                c_sock.sendto(json.dumps(resp2).encode(), addr2)
             elif msg2.get("cmd") == "set-mode":
                 a2 = msg2.get("args", {})
                 state = (a2 or {}).get("state")
