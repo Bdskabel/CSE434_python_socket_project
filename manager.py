@@ -76,7 +76,7 @@ def main():
                 if len(free) < n:
                     resp = {"status":"FAILURE", "error":"fewer than n disks with state Free"}
                 else:
-                    chosen = free[:n]
+                    chosen = random.sample(free, n)
                     for dn in chosen:
                         disks[dn]["state"] = f"InDSS:{dss_name}"
                     dsses[dss_name] = {"n": n, "striping_unit": b, "disks": chosen, "files": {}}
@@ -177,6 +177,63 @@ def main():
         
         elif cmd == "read-complete":
             resp = {"status": "SUCCESS"}
+        elif cmd == "deregister-user":
+            a = msg.get("args", {})
+            name = a.get("user_name")
+            if name not in users:
+                resp = {"status": "FAILURE", "error": "no such user"}
+            else:
+                del users[name]
+                resp = {"status": "SUCCESS"}
+        elif cmd == "deregister-disk":
+            a = msg.get("args", {})
+            name = a.get("disk_name")
+            info = disks.get(name)
+            if not info:
+                resp = {"status": "FAILURE", "error": "no such disk"}
+            elif info["state"] != "Free":
+                resp = {"status": "FAILURE", "error": "disk is InDSS; cannot deregister"}
+            else:
+                del disks[name]
+                resp = {"status": "SUCCESS"}
+        elif cmd == "decommission-dss":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+            dss = dsses.get(dss_name)
+            if not dss:
+                resp = {"status": "FAILURE", "error": "no such dss"}
+            else:
+                busy.update({"op": "decommission", "dss": dss_name, "user": a.get("user_name")})
+                disk_eps = []
+                for dn in dss["disks"]:
+                    info = disks.get(dn)
+                    disk_eps.append({"disk_name": dn, "ip": info["ip"], "c_port": info["c_port"]})
+                resp = {
+                    "status": "SUCCESS",
+                    "dss": {
+                        "dss_name": dss_name,
+                        "n": dss["n"],
+                        "striping_unit": dss["striping_unit"],
+                        "disks": disk_eps
+                    }
+                }
+        
+        elif cmd == "decommission-complete":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+            if busy["op"] != "decommission" or busy["dss"] != dss_name:
+                resp = {"status": "FAILURE", "error": "no decommission in progress"}
+            else:
+                dss = dsses.get(dss_name)
+                if not dss:
+                    resp = {"status": "FAILURE", "error": "no such dss"}
+                else:
+                    for dn in dss["disks"]:
+                        if dn in disks:
+                            disks[dn]["state"] = "Free"
+                    del dsses[dss_name]
+                    resp = {"status": "SUCCESS"}
+                busy.update({"op": None, "dss": None, "user": None})
         else:
             resp = {"status":"FAILURE", "error":"unsupported"}
 
