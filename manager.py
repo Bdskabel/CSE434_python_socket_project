@@ -38,6 +38,40 @@ def main():
             else:
                 disks[name] = {"ip":a.get("ip"), "m_port":a.get("m_port"), "c_port":a.get("c_port"), "state":"Free"}
                 resp = {"status":"SUCCESS"}
+        # configure-dss
+        elif cmd == "configure-dss":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+
+            try:
+                n = int(a.get("n"))
+                b = int(a.get("striping_unit"))
+            except Exception:
+                n = -1
+                b = -1
+
+
+            if not dss_name or dss_name in dsses:
+                resp = {"status":"FAILURE", "error":"bad or duplicate dss_name"}
+            elif n < 3:
+                resp = {"status":"FAILURE", "error":"n must be >= 3"}
+            elif not (power_of_two(b) and 128 <= b <= 1024*1024):
+                resp = {"status":"FAILURE", "error":"striping_unit must be a power of two in [128, 1048576]"}
+            else:
+                # Choose n Free disks (sorted by name)
+                free = sorted([name for name,info in disks.items() if info.get("state") == "Free"])
+                if len(free) < n:
+                    resp = {"status":"FAILURE", "error":"fewer than n disks with state Free"}
+                else:
+                    chosen = free[:n]
+                    for dn in chosen:
+                        disks[dn]["state"] = f"InDSS:{dss_name}"
+                    dsses[dss_name] = {"n": n, "striping_unit": b, "disks": chosen}
+                    resp = {
+                        "status": "SUCCESS",
+                        "dss": {"dss_name": dss_name, "n": n, "striping_unit": b, "disks": chosen}
+                    }
+
         else:
             resp = {"status":"FAILURE", "error":"unsupported in step 1"}
 
