@@ -51,7 +51,8 @@ def main():
     })
     print("register-user ->", r)
 
-    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | quit")
+    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> | decommission <dss_name> | deregister | quit")
+
     while True:
         try:
             line = input("> ").strip().lower()
@@ -233,6 +234,39 @@ def main():
             })
             print("copy-complete ->", done)
             
+        elif line.startswith("decommission "):
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                print("usage: decommission <dss_name>")
+                continue
+            dss_name = parts[1]
+        
+            # Phase 1: ask manager for DSS params and enter critical section
+            prep = send(sock, mgr, {"cmd": "decommission-dss", "args": {"dss_name": dss_name, "user_name": args.user_name}})
+            if prep.get("status") != "SUCCESS":
+                print("decommission-dss failed:", prep)
+                continue
+        
+            d = prep["dss"]
+            disks = d["disks"]  # [{disk_name, ip, c_port}, ...]
+        
+            # Instruct each disk to wipe its contents
+            ok = True
+            for ep in disks:
+                target = (ep["ip"], int(ep["c_port"]))
+                r = send_to_with_timeout(sock, target, {"cmd": "wipe", "args": {}}, timeout=1.0)
+                if r.get("status") != "SUCCESS":
+                    ok = False
+                    print("wipe failed on", ep["disk_name"], r)
+        
+            # Phase 2: tell manager we are done
+            done = send(sock, mgr, {"cmd": "decommission-complete", "args": {"dss_name": dss_name}})
+            print("decommission-complete ->", done)
+        elif line == "deregister":
+            r = send(sock, mgr, {"cmd": "deregister-user", "args": {"user_name": args.user_name}})
+            print("deregister-user ->", r)
+            if r.get("status") == "SUCCESS":
+                break
         elif line.startswith("configure"):
             parts = line.split()
             if len(parts) != 4:
