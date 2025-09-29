@@ -25,7 +25,7 @@ def main():
     })
     print("register-user ->", r)
 
-    print("Type commands: ls | quit")
+    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | quit")
     while True:
         try:
             line = input("> ").strip().lower()
@@ -36,6 +36,22 @@ def main():
         elif line == "ls":
             r = send(sock, mgr, {"cmd": "ls", "args": {}})
             print(json.dumps(r, indent=2))
+        elif line.startswith("configure"):
+            parts = line.split()
+            if len(parts) != 4:
+                print("usage: configure <dss_name> <n> <striping_unit>")
+                continue
+            dss_name, n_str, b_str = parts[1], parts[2], parts[3]
+            try:
+                n = int(n_str); b = int(b_str)
+            except ValueError:
+                print("n and striping_unit must be integers")
+                continue
+            r = send(sock, mgr, {
+                "cmd": "configure-dss",
+                "args": {"dss_name": dss_name, "n": n, "striping_unit": b}
+            })
+            print("configure-dss ->", r)
         elif line == "":
             continue
         else:
