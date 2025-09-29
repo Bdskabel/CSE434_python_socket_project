@@ -86,22 +86,25 @@ def main():
                     }
 
         elif cmd == "ls":
-            listing = {
-                "users": sorted(users.keys()),
-                "disks": [{"name": n, "state": disks[n]["state"]} for n in sorted(disks.keys())],
-                "dsses": [
-                    {
-                        "dss_name": dn,
-                        "n": dsses[dn]["n"],
-                        "striping_unit": dsses[dn]["striping_unit"],
-                        "disks": dsses[dn]["disks"],
-                        "files": dsses[dn]["files"],
-                    }
-                    for dn in sorted(dsses.keys())
-                ],
-                "free_disks": [n for n in sorted(disks.keys()) if disks[n]["state"] == "Free"],
-            }
-            resp = {"status": "SUCCESS", "listing": listing}
+            if not dsses:
+                resp = {"status": "FAILURE", "error": "no DSS configured"}
+            else:
+                listing = {
+                    "users": sorted(users.keys()),
+                    "disks": [{"name": n, "state": disks[n]["state"]} for n in sorted(disks.keys())],
+                    "dsses": [
+                        {
+                            "dss_name": dn,
+                            "n": dsses[dn]["n"],
+                            "striping_unit": dsses[dn]["striping_unit"],
+                            "disks": dsses[dn]["disks"],
+                            "files": dsses[dn]["files"],
+                        }
+                        for dn in sorted(dsses.keys())
+                    ],
+                    "free_disks": [n for n in sorted(disks.keys()) if disks[n]["state"] == "Free"],
+                }
+                resp = {"status": "SUCCESS", "listing": listing}
         elif cmd == "copy-prepare":
             a = msg.get("args", {})
             dss_name = a.get("dss_name")
