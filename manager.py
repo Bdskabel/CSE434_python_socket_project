@@ -1,6 +1,9 @@
 # Step 1 manager: supports register-user and register-disk
 import socket, json, argparse
 
+def power_of_two(x: int) -> bool:
+    return x > 0 and (x & (x - 1)) == 0
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("manager_port", type=int)
@@ -12,7 +15,8 @@ def main():
 
     # Both of the users and disks will need to send over name, IP, m_port, and c_port
     users = {}  
-    disks = {}   
+    disks = {}
+    dsses = {} 
 
     # Ensure this runs
     print(f"Manager listening on UDP {args.manager_port}")
@@ -133,6 +137,36 @@ def main():
                 else:
                     dss["files"][file_name] = {"owner": owner, "size": size}
                     resp = {"status": "SUCCESS"}
+        elif cmd == "read-prepare":
+            a = msg.get("args", {})
+            dss_name  = a.get("dss_name")
+            file_name = a.get("file_name")
+        
+            dss = dsses.get(dss_name)
+            if not dss:
+                resp = {"status": "FAILURE", "error": "no such dss"}
+            else:
+                meta = dss["files"].get(file_name)
+                if not meta:
+                    resp = {"status": "FAILURE", "error": "file not found"}
+                else:
+                    disk_eps = []
+                    for dn in dss["disks"]:
+                        info = disks.get(dn)
+                        disk_eps.append({"disk_name": dn, "ip": info["ip"], "c_port": info["c_port"]})
+                    resp = {
+                        "status": "SUCCESS",
+                        "dss": {
+                            "dss_name": dss_name,
+                            "n": dss["n"],
+                            "striping_unit": dss["striping_unit"],
+                            "disks": disk_eps
+                        },
+                        "file": {"name": file_name, "size": meta["size"], "owner": meta["owner"]}
+                    }
+        
+        elif cmd == "read-complete":
+            resp = {"status": "SUCCESS"}
         else:
             resp = {"status":"FAILURE", "error":"unsupported"}
 
