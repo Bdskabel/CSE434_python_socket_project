@@ -65,12 +65,46 @@ def main():
                         resp2 = {"status": "FAILURE", "error": f"decode error: {e}"}
 
                 c_sock.sendto(json.dumps(resp2).encode(), addr2)
+            elif msg2.get("cmd") == "read-block":
+                a2 = msg2.get("args", {})
+                file_name  = a2.get("file_name")
+                stripe_idx = a2.get("stripe_idx")
+                disk_index = a2.get("disk_index")
+
+                if mode["state"] == "fail":
+                    c_sock.sendto(json.dumps({"status": "FAILURE", "error": "simulated failure"}).encode(), addr2)
+                    continue
+
+                ok = True
+                try:
+                    stripe_idx = int(stripe_idx)
+                    disk_index = int(disk_index)
+                except Exception:
+                    ok = False
+
+                key = (file_name, stripe_idx, disk_index)
+                if not ok or not file_name or key not in store:
+                    resp2 = {"status": "FAILURE", "error": "not found"}
+                else:
+                    block = store[key]
+                    resp2 = {"status": "SUCCESS", "block_b64": base64.b64encode(block).decode("ascii")}
+                c_sock.sendto(json.dumps(resp2).encode(), addr2)
+
+            elif msg2.get("cmd") == "set-mode":
+                a2 = msg2.get("args", {})
+                state = (a2 or {}).get("state")
+                if state in ("normal", "fail"):
+                    mode["state"] = state
+                    resp2 = {"status": "SUCCESS", "mode": mode["state"]}
+                else:
+                    resp2 = {"status": "FAILURE", "error": "state must be 'normal' or 'fail'"}
+                c_sock.sendto(json.dumps(resp2).encode(), addr2)
             else:
                 c_sock.sendto(json.dumps({"status": "FAILURE", "error": "unsupported"}).encode(), addr2)
 
     threading.Thread(target=content_loop, daemon=True).start()
 
-    print("Disk registered. Ctrl+C to exit.")
+    print("Disk registered. Make sure to press Ctrl+C to exit.")
     try:
         while True:
             time.sleep(60)
