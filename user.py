@@ -2,10 +2,23 @@ import socket, json, argparse
 import os, base64
 import hashlib
 
+def guess_my_ip(to_ip: str, to_port: int) -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((to_ip, to_port))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
+
 def send(sock, mgr, msg):
+    print({"trace": "send", "to": mgr, "msg": msg})
     sock.sendto(json.dumps(msg).encode(), mgr)
     data, _ = sock.recvfrom(12000)
-    return json.loads(data.decode("utf-8"))
+    resp = json.loads(data.decode("utf-8"))
+    print({"trace": "recv", "from": "manager", "resp": resp})
+    return resp
 
 def parity_disk(n: int, stripe_idx: int) -> int:
     return n - (((stripe_idx % n) + 1))
@@ -44,9 +57,11 @@ def main():
     sock.bind(("0.0.0.0", args.my_m_port))
     mgr = (args.manager_ip, args.manager_port)
 
+    my_ip = guess_my_ip(args.manager_ip, args.manager_port)
+
     r = send(sock, mgr, {
         "cmd": "register-user",
-        "args": {"user_name": args.user_name, "ip": "127.0.0.1",
+        "args": {"user_name": args.user_name, "ip": my_ip,
                  "m_port": args.my_m_port, "c_port": args.my_c_port}
     })
     print("register-user ->", r)
