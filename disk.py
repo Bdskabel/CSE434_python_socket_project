@@ -1,6 +1,16 @@
 import socket, json, argparse, time
 import threading, base64
 
+def guess_my_ip(to_ip: str, to_port: int) -> str:
+    """Derive outward-facing local IP by opening a UDP 'connect' to manager."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((to_ip, to_port))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("disk_name")
@@ -13,17 +23,21 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", args.my_m_port))
 
+    my_ip = guess_my_ip(args.manager_ip, args.manager_port)
+    
     # Send register-disk to manager
     msg = {
         "cmd": "register-disk",
-        "args": {"disk_name": args.disk_name, "ip": "127.0.0.1",
+        "args": {"disk_name": args.disk_name, "ip": my_ip,
                  "m_port": args.my_m_port, "c_port": args.my_c_port}
     }
+    print({"trace": "send", "to": (args.manager_ip, args.manager_port), "msg": msg})
     sock.sendto(json.dumps(msg).encode(), (args.manager_ip, args.manager_port))
 
     # Wait for reply
     data, _ = sock.recvfrom(12000)
-    print(json.loads(data.decode("utf-8")))
+    resp = json.loads(data.decode("utf-8"))
+    print({"trace": "recv", "from": "manager", "resp": resp})
 
     c_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     c_sock.bind(("0.0.0.0", args.my_c_port))
