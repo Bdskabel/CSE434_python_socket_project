@@ -108,14 +108,15 @@ def main():
         elif cmd == "copy-prepare":
             a = msg.get("args", {})
             dss_name = a.get("dss_name")
+            owner    = a.get("owner")
             file_name = a.get("file_name")
-            owner = a.get("owner")
-            
         
             dss = dsses.get(dss_name)
             if not dss:
                 resp = {"status": "FAILURE", "error": "no such dss"}
             else:
+                # enter critical section for copy
+                busy.update({"op": "copy", "dss": dss_name, "user": owner})
                 disk_eps = []
                 for dn in dss["disks"]:
                     info = disks.get(dn)
@@ -127,8 +128,10 @@ def main():
                         "n": dss["n"],
                         "striping_unit": dss["striping_unit"],
                         "disks": disk_eps
-                    }
+                    },
+                    "file": {"name": file_name}
                 }
+
         
         elif cmd == "copy-complete":
             a = msg.get("args", {})
@@ -138,7 +141,9 @@ def main():
             size      = a.get("size")
         
             dss = dsses.get(dss_name)
-            if not dss:
+            if busy["op"] != "copy" or busy["dss"] != dss_name or busy["user"] != owner:
+                resp = {"status": "FAILURE", "error": "no copy in progress for this dss/user"}
+            elif not dss:
                 resp = {"status": "FAILURE", "error": "no such dss"}
             else:
                 try:
@@ -150,6 +155,8 @@ def main():
                 else:
                     dss["files"][file_name] = {"owner": owner, "size": size}
                     resp = {"status": "SUCCESS"}
+            busy.update({"op": None, "dss": None, "user": None})
+
         elif cmd == "read-prepare":
             a = msg.get("args", {})
             dss_name  = a.get("dss_name")
