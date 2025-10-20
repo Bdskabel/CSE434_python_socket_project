@@ -105,6 +105,11 @@ def main():
                     resp2 = {"status": "SUCCESS", "block_b64": base64.b64encode(block).decode("ascii")}
                 c_sock.sendto(json.dumps(resp2).encode(), addr2)
 
+            elif msg2.get("cmd") == "fail":
+                store.clear()
+                mode["state"] = "fail"
+                resp2 = {"status": "SUCCESS", "event": "fail-complete"}
+                c_sock.sendto(json.dumps(resp2).encode(), addr2)
             elif msg2.get("cmd") == "wipe":
                 store.clear()
                 resp2 = {"status": "SUCCESS"}
