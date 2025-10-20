@@ -117,7 +117,7 @@ def main():
     })
     print("register-user ->", r)
 
-    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> | disk-failure <dss_name> | decommission <dss_name> | deregister | quit")
+    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> [p] | disk-failure <dss_name> | decommission <dss_name> | deregister | quit")
 
     while True:
         try:
@@ -171,12 +171,18 @@ def main():
             if free_disks:
                 print("Free disks:", ", ".join(free_disks))
         elif cmd.startswith("read "):
-            parts = line.split(maxsplit=3)
-            if len(parts) != 4:
-                print("usage: read <dss_name> <file_name> <output_path>")
+            parts = line.split()
+            if len(parts) < 4 or len(parts) > 5:
+                print("usage: read <dss_name> <file_name> <output_path> [p]")
                 continue
-    
+        
             dss_name, file_name, out_path = parts[1], parts[2], parts[3]
+            try:
+                p_error = int(parts[4]) if len(parts) == 5 else 0
+            except ValueError:
+                print("p must be an integer 0..100")
+                continue
+            p_error = max(0, min(100, p_error))
     
             prep = send(sock, mgr, {
                 "cmd": "read-prepare",
@@ -199,52 +205,77 @@ def main():
             total_stripes = total_stripes_for_size(file_size, n, b)
 
             data_blocks = []
+            MAX_RETRIES = 5  
+            
             for stripe_idx in range(total_stripes):
-                p = parity_disk(n, stripe_idx)
-    
-                got = [None] * n
-                threads = []
-                for disk_index in range(n):
-                    target = (disks[disk_index]["ip"], int(disks[disk_index]["c_port"]))
-                    t = threading.Thread(
-                        target=read_block_parallel,
-                        args=(sock, target, file_name, stripe_idx, disk_index, got)
-                    )
-                    t.start()
-                    threads.append(t)
-                for t in threads:
-                    t.join()
-    
-                missing = [i for i in range(n) if got[i] is None]
-    
-                if len(missing) == 0:
-                    pass
-                elif len(missing) == 1:
-                    miss = missing[0]
-                    x = bytearray(b)
-                    if miss == p:
-                        for i in range(n):
-                            if i == p: continue
-                            blk = got[i]
-                            for j in range(b):
-                                x[j] ^= blk[j]
-                        got[p] = bytes(x)
-                    else:
-                        for i in range(n):
-                            if i == miss: continue
-                            blk = got[i]
-                            for j in range(b):
-                                x[j] ^= blk[j]
-                        got[miss] = bytes(x)
-                else:
-                    print(f"read failed at stripe {stripe_idx}: more than one block missing")
-                    data_blocks = []
-                    break
-    
-                for i in range(n):
-                    if i == p:
+                pidx = parity_disk(n, stripe_idx)
+            
+                for attempt in range(MAX_RETRIES):
+                    got = [None] * n
+                    threads = []
+                    for disk_index in range(n):
+                        target = (disks[disk_index]["ip"], int(disks[disk_index]["c_port"]))
+                        t = threading.Thread(
+                            target=read_block_parallel,
+                            args=(sock, target, file_name, stripe_idx, disk_index, got)
+                        )
+                        t.start()
+                        threads.append(t)
+                    for t in threads:
+                        t.join()
+            
+                    if p_error > 0 and random.randrange(100) < p_error:
+                        flip_idx = random.randrange(n)
+                        if got[flip_idx] is not None:
+                            bb = bytearray(got[flip_idx])
+                            if len(bb) > 0:
+                                j = random.randrange(len(bb))
+                                bb[j] ^= (1 << random.randrange(8))
+                                got[flip_idx] = bytes(bb)
+            
+                    missing = [i for i in range(n) if got[i] is None]
+                    if len(missing) > 1:
+                        if attempt == MAX_RETRIES - 1:
+                            print(f"read failed at stripe {stripe_idx}: multiple blocks missing after retries")
+                            data_blocks = []
+                            break
                         continue
-                    data_blocks.append(got[i])
+            
+                    if len(missing) == 1:
+                        miss = missing[0]
+                        others = [got[i] for i in range(n) if i != miss]
+                        if any(x is None for x in others):
+                            if attempt == MAX_RETRIES - 1:
+                                print(f"read failed at stripe {stripe_idx}: not enough blocks to reconstruct")
+                                data_blocks = []
+                                break
+                            continue
+                        got[miss] = xor_bytes(others, b)
+            
+                    if any(x is None for i, x in enumerate(got) if i != pidx):
+                        if attempt == MAX_RETRIES - 1:
+                            print(f"read failed at stripe {stripe_idx}: missing data for parity verification")
+                            data_blocks = []
+                            break
+                        continue
+            
+                    calc_parity = xor_bytes([got[i] for i in range(n) if i != pidx], b)
+                    if calc_parity != got[pidx]:
+                        if attempt == MAX_RETRIES - 1:
+                            print(f"read failed parity at stripe {stripe_idx} after {MAX_RETRIES} attempts")
+                            data_blocks = []
+                            break
+                        continue
+            
+                    for i in range(n):
+                        if i == pidx:
+                            continue
+                        data_blocks.append(got[i])
+                    break  
+            
+                if not data_blocks or len(data_blocks) < (stripe_idx + 1) * (n - 1):
+                    break
+
     
             if not data_blocks:
                 print("read aborted")
@@ -256,6 +287,11 @@ def main():
                 with open(out_path, "wb") as f:
                     f.write(buf)
                 print(f"read -> wrote {len(buf)} bytes to {out_path}")
+                sha_read = hashlib.sha256(buf).hexdigest()
+                sha_expected = prep.get("file", {}).get("sha256")
+                if sha_expected:
+                    print("SHA256 match:" if sha_read == sha_expected else "SHA256 MISMATCH!", sha_read)
+
             except Exception as e:
                 print("write failed:", e)
     
@@ -343,11 +379,13 @@ def main():
                 if not all(results):
                     print(f"warning: some write-block failed on stripe {stripe_idx}")
 
+            sha_src = hashlib.sha256(file_bytes).hexdigest()
             done = send(sock, mgr, {
                 "cmd": "copy-complete",
                 "args": {"dss_name": dss_name, "file_name": file_name,
-                         "owner": owner, "size": len(file_bytes)}
+                         "owner": owner, "size": len(file_bytes), "sha256": sha_src}
             })
+
             print("copy-complete ->", done)
             
         elif cmd.startswith("disk-failure "):
