@@ -29,12 +29,17 @@ def main():
         cmd = msg.get("cmd","")
 
         if busy["op"] is not None:
-            allowed = "copy-complete" if busy["op"] == "copy" else "decommission-complete"
+            allowed_map = {
+                "copy": "copy-complete",
+                "decommission": "decommission-complete",
+                "disk-failure": "recovery-complete",
+            }
+            allowed = allowed_map.get(busy["op"])
             if cmd != allowed:
                 resp = {"status": "FAILURE", "error": f"busy: {busy['op']} in progress"}
                 sock.sendto(json.dumps(resp).encode(), addr)
                 continue
-        # Handle the register-user command
+
         if cmd == "register-user":
             a = msg.get("args", {})
             name = a.get("user_name")
@@ -43,7 +48,6 @@ def main():
             else:
                 users[name] = {"ip":a.get("ip"), "m_port":a.get("m_port"), "c_port":a.get("c_port")}
                 resp = {"status":"SUCCESS"}
-        # Handle the register-disk command
         elif cmd == "register-disk":
             a = msg.get("args", {})
             name = a.get("disk_name")
@@ -52,7 +56,6 @@ def main():
             else:
                 disks[name] = {"ip":a.get("ip"), "m_port":a.get("m_port"), "c_port":a.get("c_port"), "state":"Free"}
                 resp = {"status":"SUCCESS"}
-        # configure-dss
         elif cmd == "configure-dss":
             a = msg.get("args", {})
             dss_name = a.get("dss_name")
@@ -72,7 +75,6 @@ def main():
             elif not (power_of_two(b) and 128 <= b <= 1024*1024):
                 resp = {"status":"FAILURE", "error":"striping_unit must be a power of two in [128, 1048576]"}
             else:
-                # Choose n Free disks (sorted by name)
                 free = sorted([name for name,info in disks.items() if info.get("state") == "Free"])
                 if len(free) < n:
                     resp = {"status":"FAILURE", "error":"fewer than n disks with state Free"}
@@ -116,7 +118,6 @@ def main():
             if not dss:
                 resp = {"status": "FAILURE", "error": "no such dss"}
             else:
-                # enter critical section for copy
                 busy.update({"op": "copy", "dss": dss_name, "user": owner})
                 disk_eps = []
                 for dn in dss["disks"]:
@@ -219,6 +220,34 @@ def main():
             else:
                 del disks[name]
                 resp = {"status": "SUCCESS"}
+        elif cmd == "disk-failure":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+        
+            dss = dsses.get(dss_name)
+            if not dss:
+                resp = {"status": "FAILURE", "error": "no such dss"}
+            elif reads_in_progress.get(dss_name, 0) > 0:
+                resp = {"status": "FAILURE", "error": "reads-in-progress"}
+            else:
+                busy.update({"op": "disk-failure", "dss": dss_name, "user": a.get("user_name")})
+        
+                disk_eps = []
+                for dn in dss["disks"]:
+                    info = disks.get(dn)
+                    disk_eps.append({"disk_name": dn, "ip": info["ip"], "c_port": info["c_port"]})
+        
+                resp = {
+                    "status": "SUCCESS",
+                    "dss": {
+                        "dss_name": dss_name,
+                        "n": dss["n"],
+                        "striping_unit": dss["striping_unit"],
+                        "disks": disk_eps
+                    },
+                    "files": dss["files"]
+                }
+
         elif cmd == "decommission-dss":
             a = msg.get("args", {})
             dss_name = a.get("dss_name")
@@ -241,6 +270,17 @@ def main():
                     }
                 }
         
+        elif cmd == "recovery-complete":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+            if busy["op"] != "disk-failure" or busy["dss"] != dss_name:
+                resp = {"status": "FAILURE", "error": "no disk-failure in progress"}
+            elif dss_name not in dsses:
+                resp = {"status": "FAILURE", "error": "no such dss"}
+            else:
+                busy.update({"op": None, "dss": None, "user": None})
+                resp = {"status": "SUCCESS"}
+
         elif cmd == "decommission-complete":
             a = msg.get("args", {})
             dss_name = a.get("dss_name")
