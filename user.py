@@ -2,6 +2,7 @@ import socket, json, argparse
 import os, base64
 import hashlib
 import threading
+import random
 
 def fmt_bytes(n: int) -> str:
     if n < 1024:
@@ -116,7 +117,7 @@ def main():
     })
     print("register-user ->", r)
 
-    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> | decommission <dss_name> | deregister | quit")
+    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> | disk-failure <dss_name> | decommission <dss_name> | deregister | quit")
 
     while True:
         try:
@@ -348,6 +349,91 @@ def main():
             })
             print("copy-complete ->", done)
             
+        elif line.startswith("disk-failure "):
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                print("usage: disk-failure <dss_name>")
+                continue
+            dss_name = parts[1]
+        
+            prep = send(sock, mgr, {"cmd": "disk-failure", "args": {"dss_name": dss_name, "user_name": args.user_name}})
+            if prep.get("status") != "SUCCESS":
+                print(f"disk-failure denied: {prep.get('error', 'unknown error')}")
+                continue
+        
+            d = prep["dss"]
+            n = int(d["n"])
+            b = int(d["striping_unit"])
+            disks = d["disks"]          
+            files = prep.get("files", {}) 
+        
+            failed_idx = random.randrange(n)
+            failed_ep = disks[failed_idx]
+            failed_target = (failed_ep["ip"], int(failed_ep["c_port"]))
+        
+            fr = send_to_with_timeout(sock, failed_target, {"cmd": "fail", "args": {}}, timeout=1.0)
+            if fr.get("status") != "SUCCESS":
+                print("disk did not confirm failure:", fr)
+                _ = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
+                continue
+        
+            print(f"Failed disk index {failed_idx} ({failed_ep['disk_name']}). Starting reconstruction...")
+        
+            for fname, meta in files.items():
+                fsize = int(meta.get("size", 0))
+                total_stripes = total_stripes_for_size(fsize, n, b)
+        
+                for stripe_idx in range(total_stripes):
+                    got = [None] * n
+                    threads = []
+                    for k in range(n):
+                        if k == failed_idx:
+                            continue
+                        target = (disks[k]["ip"], int(disks[k]["c_port"]))
+                        t = threading.Thread(
+                            target=read_block_parallel,
+                            args=(sock, target, fname, stripe_idx, k, got)
+                        )
+                        t.start()
+                        threads.append(t)
+                    for t in threads:
+                        t.join()
+        
+                    missing_other = [i for i in range(n) if i != failed_idx and got[i] is None]
+                    if missing_other:
+                        print(f"reconstruct failed at stripe {stripe_idx} for file {fname}: missing from {missing_other}")
+                        _ = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
+                        break
+        
+                    others = [got[i] for i in range(n) if i != failed_idx]
+                    rebuilt = xor_bytes(others, b)
+                    is_parity = (failed_idx == parity_disk(n, stripe_idx))
+        
+                    payload = {
+                        "cmd": "write-block",
+                        "args": {
+                            "dss_name": dss_name,
+                            "file_name": fname,
+                            "stripe_idx": stripe_idx,
+                            "disk_index": failed_idx,
+                            "is_parity": is_parity,
+                            "block_b64": b64e(rebuilt),
+                        }
+                    }
+                    wr = send_to_with_timeout(sock, failed_target, payload, timeout=1.0)
+                    if wr.get("status") != "SUCCESS":
+                        print(f"write failed during reconstruction at stripe {stripe_idx} for file {fname}: {wr}")
+                        _ = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
+                        break
+                else:
+                    continue
+                break
+        
+            _ = send_to_with_timeout(sock, failed_target, {"cmd": "set-mode", "args": {"state": "normal"}}, timeout=1.0)
+        
+            done = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
+            print("recovery-complete ->", done)
+
         elif line.startswith("decommission "):
             parts = line.split(maxsplit=1)
             if len(parts) != 2:
@@ -355,16 +441,14 @@ def main():
                 continue
             dss_name = parts[1]
         
-            # Phase 1: ask manager for DSS params and enter critical section
             prep = send(sock, mgr, {"cmd": "decommission-dss", "args": {"dss_name": dss_name, "user_name": args.user_name}})
             if prep.get("status") != "SUCCESS":
                 print("decommission-dss failed:", prep)
                 continue
         
             d = prep["dss"]
-            disks = d["disks"]  # [{disk_name, ip, c_port}, ...]
+            disks = d["disks"] 
         
-            # Instruct each disk to wipe its contents
             ok = True
             for ep in disks:
                 target = (ep["ip"], int(ep["c_port"]))
@@ -373,7 +457,6 @@ def main():
                     ok = False
                     print("wipe failed on", ep["disk_name"], r)
         
-            # Phase 2: tell manager we are done
             done = send(sock, mgr, {"cmd": "decommission-complete", "args": {"dss_name": dss_name}})
             print("decommission-complete ->", done)
         elif line == "deregister":
