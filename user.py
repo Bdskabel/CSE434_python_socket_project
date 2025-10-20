@@ -248,7 +248,7 @@ def main():
                     offset += len(chunk)
                     data_chunks.append(pad_to(b, chunk))
 
-                parity = xor_bytes(chunk, b)
+                parity = xor_bytes(data_chunks, b)
 
                 p = parity_disk(n, stripe_idx)
                 results = [False] * n
