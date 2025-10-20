@@ -19,6 +19,7 @@ def main():
     disks = {}
     dsses = {} 
     busy = {"op": None, "dss": None, "user": None} 
+    reads_in_progress = {} 
 
     # Ensure this runs
     print(f"Manager listening on UDP {args.manager_port}")
@@ -161,7 +162,7 @@ def main():
             a = msg.get("args", {})
             dss_name  = a.get("dss_name")
             file_name = a.get("file_name")
-            user_name = a.get("user_name")
+            user_name = a.get("user_name") 
         
             dss = dsses.get(dss_name)
             if not dss:
@@ -170,8 +171,7 @@ def main():
                 meta = dss["files"].get(file_name)
                 if not meta:
                     resp = {"status": "FAILURE", "error": "file not found"}
-                elif meta.get("owner") != user_name:
-                    # Ownership enforcement added in Step 6
+                elif user_name is not None and meta.get("owner") != user_name:
                     resp = {"status": "FAILURE", "error": "NOT_OWNER"}
                 else:
                     disk_eps = []
@@ -188,10 +188,18 @@ def main():
                         },
                         "file": {"name": file_name, "size": meta["size"], "owner": meta["owner"]}
                     }
+                    reads_in_progress[dss_name] = reads_in_progress.get(dss_name, 0) + 1
 
         
         elif cmd == "read-complete":
+            a = msg.get("args", {})
+            dss_name = a.get("dss_name")
+            if dss_name:
+                count = reads_in_progress.get(dss_name, 0)
+                if count > 0:
+                    reads_in_progress[dss_name] = count - 1
             resp = {"status": "SUCCESS"}
+
         elif cmd == "deregister-user":
             a = msg.get("args", {})
             name = a.get("user_name")
