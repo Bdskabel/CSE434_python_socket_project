@@ -161,6 +161,7 @@ def main():
             a = msg.get("args", {})
             dss_name  = a.get("dss_name")
             file_name = a.get("file_name")
+            user_name = a.get("user_name")
         
             dss = dsses.get(dss_name)
             if not dss:
@@ -169,6 +170,9 @@ def main():
                 meta = dss["files"].get(file_name)
                 if not meta:
                     resp = {"status": "FAILURE", "error": "file not found"}
+                elif meta.get("owner") != user_name:
+                    # Ownership enforcement added in Step 6
+                    resp = {"status": "FAILURE", "error": "NOT_OWNER"}
                 else:
                     disk_eps = []
                     for dn in dss["disks"]:
@@ -184,6 +188,7 @@ def main():
                         },
                         "file": {"name": file_name, "size": meta["size"], "owner": meta["owner"]}
                     }
+
         
         elif cmd == "read-complete":
             resp = {"status": "SUCCESS"}
