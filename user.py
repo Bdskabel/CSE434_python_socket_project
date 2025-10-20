@@ -1,6 +1,7 @@
 import socket, json, argparse
 import os, base64
 import hashlib
+import threading
 
 def guess_my_ip(to_ip: str, to_port: int) -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -10,6 +11,27 @@ def guess_my_ip(to_ip: str, to_port: int) -> str:
     finally:
         s.close()
     return ip
+
+
+def read_block_parallel(sock, target, file_name, stripe_idx, disk_index, out_list):
+    """Read one block; store bytes (or None) at out_list[disk_index]."""
+    r = send_to_with_timeout(sock, target, {
+        "cmd": "read-block",
+        "args": {"file_name": file_name, "stripe_idx": stripe_idx, "disk_index": disk_index}
+    }, timeout=1.0)
+    if r.get("status") == "SUCCESS":
+        try:
+            out_list[disk_index] = b64d(r["block_b64"])
+        except Exception:
+            out_list[disk_index] = None
+    else:
+        out_list[disk_index] = None
+
+def write_block_parallel(sock, target, payload, results, idx):
+    """Write one block; set results[idx] = True/False."""
+    r = send_to_with_timeout(sock, target, payload, timeout=1.0)
+    results[idx] = (r.get("status") == "SUCCESS")
+
 
 
 def send(sock, mgr, msg):
@@ -107,17 +129,17 @@ def main():
                 p = parity_disk(n, stripe_idx)
     
                 got = [None] * n
+                threads = []
                 for disk_index in range(n):
                     target = (disks[disk_index]["ip"], int(disks[disk_index]["c_port"]))
-                    r = send_to_with_timeout(sock, target, {
-                        "cmd": "read-block",
-                        "args": {"file_name": file_name, "stripe_idx": stripe_idx, "disk_index": disk_index}
-                    }, timeout=1.0)
-                    if r.get("status") == "SUCCESS":
-                        try:
-                            got[disk_index] = b64d(r["block_b64"])
-                        except Exception:
-                            got[disk_index] = None
+                    t = threading.Thread(
+                        target=read_block_parallel,
+                        args=(sock, target, file_name, stripe_idx, disk_index, got)
+                    )
+                    t.start()
+                    threads.append(t)
+                for t in threads:
+                    t.join()
     
                 missing = [i for i in range(n) if got[i] is None]
     
@@ -217,6 +239,9 @@ def main():
                         parity[i] ^= ch[i]
                 parity = bytes(parity)
 
+                p = parity_disk(n, stripe_idx)
+                results = [False] * n
+                threads = []
                 data_iter = iter(data_chunks)
                 for disk_index in range(n):
                     if disk_index == p:
@@ -227,7 +252,7 @@ def main():
                         is_parity = False
 
                     target = (disks[disk_index]["ip"], int(disks[disk_index]["c_port"]))
-                    msg = {
+                    payload = {
                         "cmd": "write-block",
                         "args": {
                             "dss_name": dss_name,
@@ -238,9 +263,18 @@ def main():
                             "block_b64": b64e(block),
                         }
                     }
-                    ack = send_to_with_timeout(sock, target, msg, timeout=1.0)
-                    if ack.get("status") != "SUCCESS":
-                        print("write-block failed:", ack)
+                    t = threading.Thread(
+                        target=write_block_parallel,
+                        args=(sock, target, payload, results, disk_index)
+                    )
+                    t.start()
+                    threads.append(t)
+                
+                for t in threads:
+                    t.join()
+                
+                if not all(results):
+                    print(f"warning: some write-block failed on stripe {stripe_idx}")
 
             done = send(sock, mgr, {
                 "cmd": "copy-complete",
