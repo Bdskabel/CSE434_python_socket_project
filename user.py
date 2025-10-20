@@ -3,6 +3,26 @@ import os, base64
 import hashlib
 import threading
 
+def blocks_per_stripe(n: int) -> int:
+    return n - 1 
+
+def total_stripes_for_size(file_size: int, n: int, b: int) -> int:
+    denom = blocks_per_stripe(n) * b
+    return (file_size + denom - 1) // denom
+
+def pad_to(bsize: int, data: bytes) -> bytes:
+    if len(data) >= bsize:
+        return data[:bsize]
+    return data + bytes(bsize - len(data))
+
+def xor_bytes(chunks: list[bytes], b: int) -> bytes:
+    out = bytearray(b)
+    for ch in chunks:
+        for i in range(b):
+            out[i] ^= ch[i]
+    return bytes(out)
+
+
 def guess_my_ip(to_ip: str, to_port: int) -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -121,9 +141,8 @@ def main():
             disks = prep["dss"]["disks"]
             file_size = int(prep["file"]["size"])
     
-            blocks_per_stripe = n - 1
-            total_stripes = (file_size + (blocks_per_stripe * b) - 1) // (blocks_per_stripe * b)
-    
+            total_stripes = total_stripes_for_size(file_size, n, b)
+
             data_blocks = []
             for stripe_idx in range(total_stripes):
                 p = parity_disk(n, stripe_idx)
@@ -216,28 +235,20 @@ def main():
             b = int(d["striping_unit"])
             disks = d["disks"]  
 
-            blocks_per_stripe = n - 1
             total = len(file_bytes)
-            total_stripes = (total + (blocks_per_stripe * b) - 1) // (blocks_per_stripe * b)
+            total_stripes = total_stripes_for_size(total, n, b)
 
             offset = 0
             for stripe_idx in range(total_stripes):
                 p = parity_disk(n, stripe_idx)
                 data_chunks = []
 
-                for _ in range(blocks_per_stripe):
-                    real = min(b, max(0, total - offset))
-                    chunk = file_bytes[offset:offset + real]
-                    offset += real
-                    if len(chunk) < b:
-                        chunk = chunk + bytes(b - len(chunk))
-                    data_chunks.append(chunk)
+                for _ in range(blocks_per_stripe(n)):
+                    chunk = file_bytes[offset:offset + b]
+                    offset += len(chunk)
+                    data_chunks.append(pad_to(b, chunk))
 
-                parity = bytearray(b)
-                for ch in data_chunks:
-                    for i in range(b):
-                        parity[i] ^= ch[i]
-                parity = bytes(parity)
+                parity = xor_bytes(chunk, b)
 
                 p = parity_disk(n, stripe_idx)
                 results = [False] * n
