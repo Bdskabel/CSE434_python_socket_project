@@ -246,6 +246,7 @@ def main():
     
             if not data_blocks:
                 print("read aborted")
+                _ = send(sock, mgr, {"cmd": "read-complete", "args": {"dss_name": dss_name}})
                 continue
     
             buf = b"".join(data_blocks)[:file_size]
