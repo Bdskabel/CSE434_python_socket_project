@@ -254,6 +254,8 @@ def main():
             dss = dsses.get(dss_name)
             if not dss:
                 resp = {"status": "FAILURE", "error": "no such dss"}
+            elif reads_in_progress.get(dss_name, 0) > 0:
+                resp = {"status": "FAILURE", "error": "reads-in-progress"}
             else:
                 busy.update({"op": "decommission", "dss": dss_name, "user": a.get("user_name")})
                 disk_eps = []
@@ -269,6 +271,7 @@ def main():
                         "disks": disk_eps
                     }
                 }
+
         
         elif cmd == "recovery-complete":
             a = msg.get("args", {})
