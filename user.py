@@ -121,12 +121,13 @@ def main():
 
     while True:
         try:
-            line = input("> ").strip().lower()
+            line = input("> ").strip()
+            cmd = line.lower()
         except EOFError:
             break
-        if line in ("quit", "exit"):
+        if cmd in ("quit", "exit"):
             break
-        elif line == "ls":
+        elif cmd == "ls":
             r = send(sock, mgr, {"cmd": "ls", "args": {}})
             if r.get("status") != "SUCCESS":
                 print(f"ls failed: {r.get('error', 'unknown error')}")
@@ -169,7 +170,7 @@ def main():
         
             if free_disks:
                 print("Free disks:", ", ".join(free_disks))
-        elif line.startswith("read "):
+        elif cmd.startswith("read "):
             parts = line.split(maxsplit=3)
             if len(parts) != 4:
                 print("usage: read <dss_name> <file_name> <output_path>")
@@ -261,7 +262,7 @@ def main():
             done = send(sock, mgr, {"cmd": "read-complete", "args": {"dss_name": dss_name}})
             if done.get("status") != "SUCCESS":
                 print("read-complete ack:", done)
-        elif line.startswith("copy "):
+        elif cmd.startswith("copy "):
             parts = line.split(maxsplit=2)
             if len(parts) != 3:
                 print("usage: copy <dss_name> <local_file_path>")
@@ -349,7 +350,7 @@ def main():
             })
             print("copy-complete ->", done)
             
-        elif line.startswith("disk-failure "):
+        elif cmd.startswith("disk-failure "):
             parts = line.split(maxsplit=1)
             if len(parts) != 2:
                 print("usage: disk-failure <dss_name>")
@@ -434,7 +435,7 @@ def main():
             done = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
             print("recovery-complete ->", done)
 
-        elif line.startswith("decommission "):
+        elif cmd.startswith("decommission "):
             parts = line.split(maxsplit=1)
             if len(parts) != 2:
                 print("usage: decommission <dss_name>")
@@ -459,12 +460,12 @@ def main():
         
             done = send(sock, mgr, {"cmd": "decommission-complete", "args": {"dss_name": dss_name}})
             print("decommission-complete ->", done)
-        elif line == "deregister":
+        elif cmd == "deregister":
             r = send(sock, mgr, {"cmd": "deregister-user", "args": {"user_name": args.user_name}})
             print("deregister-user ->", r)
             if r.get("status") == "SUCCESS":
                 break
-        elif line.startswith("configure"):
+        elif cmd.startswith("configure"):
             parts = line.split()
             if len(parts) != 4:
                 print("usage: configure <dss_name> <n> <striping_unit>")
@@ -480,7 +481,7 @@ def main():
                 "args": {"dss_name": dss_name, "n": n, "striping_unit": b}
             })
             print("configure-dss ->", r)
-        elif line == "":
+        elif not line:
             continue
         else:
             print("unknown command")
