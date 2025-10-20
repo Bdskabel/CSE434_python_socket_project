@@ -3,6 +3,14 @@ import os, base64
 import hashlib
 import threading
 
+def fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n // 1024} KB"
+    return f"{n // (1024 * 1024)} MB"
+
+
 def blocks_per_stripe(n: int) -> int:
     return n - 1 
 
@@ -119,7 +127,47 @@ def main():
             break
         elif line == "ls":
             r = send(sock, mgr, {"cmd": "ls", "args": {}})
-            print(json.dumps(r, indent=2))
+            if r.get("status") != "SUCCESS":
+                print(f"ls failed: {r.get('error', 'unknown error')}")
+                continue
+        
+            listing = r.get("listing", {})
+            users_list = listing.get("users", [])
+            disks_list = listing.get("disks", [])
+            dsses_list = listing.get("dsses", [])
+            free_disks = listing.get("free_disks", [])
+        
+            print("Users:", ", ".join(users_list) if users_list else "(none)")
+        
+            print("Disks:")
+            if disks_list:
+                for d in disks_list:
+                    print(f"  - {d.get('name','?')} [{d.get('state','?')}]")
+            else:
+                print("  (none)")
+        
+            if not dsses_list:
+                print("No DSS configured.")
+            else:
+                for dss in dsses_list:
+                    dss_name = dss.get("dss_name", "?")
+                    n = dss.get("n", 0)
+                    su = dss.get("striping_unit", 0)
+                    disk_names = dss.get("disks", [])
+                    files = dss.get("files", {})
+        
+                    print(f"{dss_name}: Disk array with n={n} ({', '.join(disk_names)}) with striping-unit {fmt_bytes(su)}.")
+        
+                    if files:
+                        for fname, meta in files.items():
+                            size = meta.get("size", 0)
+                            owner = meta.get("owner", "?")
+                            print(f"  {fname} {size:,} B {owner}")
+                    else:
+                        print("  (no files)")
+        
+            if free_disks:
+                print("Free disks:", ", ".join(free_disks))
         elif line.startswith("read "):
             parts = line.split(maxsplit=3)
             if len(parts) != 4:
