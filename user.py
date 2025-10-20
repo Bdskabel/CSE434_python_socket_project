@@ -44,7 +44,7 @@ def guess_my_ip(to_ip: str, to_port: int) -> str:
 
 def read_block_parallel(sock, target, file_name, stripe_idx, disk_index, out_list):
     """Read one block; store bytes (or None) at out_list[disk_index]."""
-    r = send_to_with_timeout(sock, target, {
+    r = send_to_with_timeout(target, {
         "cmd": "read-block",
         "args": {"file_name": file_name, "stripe_idx": stripe_idx, "disk_index": disk_index}
     }, timeout=1.0)
@@ -58,7 +58,7 @@ def read_block_parallel(sock, target, file_name, stripe_idx, disk_index, out_lis
 
 def write_block_parallel(sock, target, payload, results, idx):
     """Write one block; set results[idx] = True/False."""
-    r = send_to_with_timeout(sock, target, payload, timeout=1.0)
+    r = send_to_with_timeout(target, payload, timeout=1.0)
     results[idx] = (r.get("status") == "SUCCESS")
 
 
@@ -77,16 +77,18 @@ def parity_disk(n: int, stripe_idx: int) -> int:
 def b64e(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
 
-def send_to_with_timeout(sock, target, msg, timeout=1.0):
-    sock.settimeout(timeout)
+def send_to_with_timeout(target, msg, timeout=1.0):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sock.sendto(json.dumps(msg).encode(), target)
-        data, _ = sock.recvfrom(65535)
+        s.settimeout(timeout)
+        s.bind(("0.0.0.0", 0))  # ephemeral source port
+        s.sendto(json.dumps(msg).encode(), target)
+        data, _ = s.recvfrom(65535)
         return json.loads(data.decode("utf-8"))
     except socket.timeout:
         return {"status": "FAILURE", "error": "timeout"}
     finally:
-        sock.settimeout(None)
+        s.close()
 
 def b64d(s: str) -> bytes:
     return base64.b64decode(s.encode("ascii"))
@@ -410,7 +412,7 @@ def main():
             failed_ep = disks[failed_idx]
             failed_target = (failed_ep["ip"], int(failed_ep["c_port"]))
         
-            fr = send_to_with_timeout(sock, failed_target, {"cmd": "fail", "args": {}}, timeout=1.0)
+            fr = send_to_with_timeout(failed_target, {"cmd": "fail", "args": {}}, timeout=1.0)
             if fr.get("status") != "SUCCESS":
                 print("disk did not confirm failure:", fr)
                 _ = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
@@ -459,7 +461,7 @@ def main():
                             "block_b64": b64e(rebuilt),
                         }
                     }
-                    wr = send_to_with_timeout(sock, failed_target, payload, timeout=1.0)
+                    wr = send_to_with_timeout(failed_target, payload, timeout=1.0)
                     if wr.get("status") != "SUCCESS":
                         print(f"write failed during reconstruction at stripe {stripe_idx} for file {fname}: {wr}")
                         _ = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
@@ -468,7 +470,7 @@ def main():
                     continue
                 break
         
-            _ = send_to_with_timeout(sock, failed_target, {"cmd": "set-mode", "args": {"state": "normal"}}, timeout=1.0)
+            _ = send_to_with_timeout(failed_target, {"cmd": "set-mode", "args": {"state": "normal"}}, timeout=1.0)
         
             done = send(sock, mgr, {"cmd": "recovery-complete", "args": {"dss_name": dss_name}})
             print("recovery-complete ->", done)
@@ -491,7 +493,7 @@ def main():
             ok = True
             for ep in disks:
                 target = (ep["ip"], int(ep["c_port"]))
-                r = send_to_with_timeout(sock, target, {"cmd": "wipe", "args": {}}, timeout=1.0)
+                r = send_to_with_timeout(target, {"cmd": "wipe", "args": {}}, timeout=1.0)
                 if r.get("status") != "SUCCESS":
                     ok = False
                     print("wipe failed on", ep["disk_name"], r)
