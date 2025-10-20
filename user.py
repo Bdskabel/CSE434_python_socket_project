@@ -178,11 +178,16 @@ def main():
     
             prep = send(sock, mgr, {
                 "cmd": "read-prepare",
-                "args": {"dss_name": dss_name, "file_name": file_name}
+                "args": {"dss_name": dss_name, "file_name": file_name, "user_name": args.user_name}
             })
             if prep.get("status") != "SUCCESS":
-                print("read-prepare failed:", prep)
+                err = prep.get("error", "unknown error")
+                if err == "NOT_OWNER":
+                    print(f"read denied: you are not the owner of '{file_name}' on DSS '{dss_name}'.")
+                else:
+                    print(f"read-prepare failed: {err}")
                 continue
+
     
             n = int(prep["dss"]["n"])
             b = int(prep["dss"]["striping_unit"])
