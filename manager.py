@@ -1,4 +1,3 @@
-# Step 1 manager: supports register-user and register-disk
 import socket, json, argparse
 import random
 
@@ -10,21 +9,18 @@ def main():
     ap.add_argument("manager_port", type=int)
     args = ap.parse_args()
 
-    # Create & bind UDP socket like homework 2 (to listen)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", args.manager_port)) 
 
-    # Both of the users and disks will need to send over name, IP, m_port, and c_port
     users = {}  
     disks = {}
     dsses = {} 
     busy = {"op": None, "dss": None, "user": None} 
     reads_in_progress = {} 
 
-    # Ensure this runs
     print(f"Manager listening on UDP {args.manager_port}")
     while True:
-        data, addr = sock.recvfrom(12000)  # 12 KB, might need to up this?
+        data, addr = sock.recvfrom(12000)  
         msg = json.loads(data.decode("utf-8"))
         cmd = msg.get("cmd","")
 
@@ -155,8 +151,10 @@ def main():
                 if size < 0:
                     resp = {"status": "FAILURE", "error": "invalid size"}
                 else:
-                    dss["files"][file_name] = {"owner": owner, "size": size}
+                    sha256 = a.get("sha256")
+                    dss["files"][file_name] = {"owner": owner, "size": size, "sha256": sha256}
                     resp = {"status": "SUCCESS"}
+
             busy.update({"op": None, "dss": None, "user": None})
 
         elif cmd == "read-prepare":
@@ -187,7 +185,8 @@ def main():
                             "striping_unit": dss["striping_unit"],
                             "disks": disk_eps
                         },
-                        "file": {"name": file_name, "size": meta["size"], "owner": meta["owner"]}
+                        "file": {"name": file_name, "size": meta["size"], "owner": meta["owner"], "sha256": meta.get("sha256")}
+
                     }
                     reads_in_progress[dss_name] = reads_in_progress.get(dss_name, 0) + 1
 
