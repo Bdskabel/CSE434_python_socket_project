@@ -41,7 +41,25 @@ def guess_my_ip(to_ip: str, to_port: int) -> str:
         s.close()
     return ip
 
-
+def show_file(path: str, max_bytes: int = 4096) -> None:
+    """Print up to max_bytes from a local file as text."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(max_bytes)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("utf-8", errors="replace")
+        print(text, end="")
+        try:
+            total = os.path.getsize(path)
+            if total > max_bytes:
+                print(f"\n... (truncated: {max_bytes}/{total} bytes) ...")
+        except Exception:
+            pass
+    except Exception as e:
+        print("show failed:", e)
+        
 def read_block_parallel(sock, target, file_name, stripe_idx, disk_index, out_list):
     """Read one block; store bytes (or None) at out_list[disk_index]."""
     r = send_to_with_timeout(target, {
@@ -119,7 +137,7 @@ def main():
     })
     print("register-user ->", r)
 
-    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> [p] | disk-failure <dss_name> | decommission <dss_name> | deregister | quit")
+    print("Type commands: ls | configure <dss_name> <n> <striping_unit> | copy <dss_name> <local_file_path> | read <dss_name> <file_name> <output_path> [p] | disk-failure <dss_name> | decommission <dss_name> | deregister | show <path> [max_bytes] | quit")
 
     while True:
         try:
@@ -505,6 +523,16 @@ def main():
             print("deregister-user ->", r)
             if r.get("status") == "SUCCESS":
                 break
+
+        elif cmd.startswith("show "):
+            parts = line.split(maxsplit=2)
+            if len(parts) == 2:
+                show_file(parts[1])
+            elif len(parts) == 3 and parts[2].isdigit():
+                show_file(parts[1], int(parts[2]))
+            else:
+                print("usage: show <path> [max_bytes]")
+
         elif cmd.startswith("configure"):
             parts = line.split()
             if len(parts) != 4:
