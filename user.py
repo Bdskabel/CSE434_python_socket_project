@@ -256,7 +256,7 @@ def main():
             except Exception as e:
                 print("write failed:", e)
     
-            done = send(sock, mgr, {"cmd": "read-complete", "args": {}})
+            done = send(sock, mgr, {"cmd": "read-complete", "args": {"dss_name": dss_name}})
             if done.get("status") != "SUCCESS":
                 print("read-complete ack:", done)
         elif line.startswith("copy "):
